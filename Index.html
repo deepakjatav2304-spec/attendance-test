@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>New Employee Attendance</title>
+
+<style>
+*{box-sizing:border-box}
+body{
+  margin:0;
+  padding:18px;
+  font-family:Arial,sans-serif;
+  background:#f3f3f3;
+}
+.box{
+  max-width:500px;
+  margin:auto;
+  padding:20px;
+  background:white;
+  border-radius:15px;
+  box-shadow:0 2px 12px #0002;
+}
+h2{text-align:center;margin-top:0}
+.step{
+  margin-top:15px;
+  padding:15px;
+  border:1px solid #ddd;
+  border-radius:12px;
+}
+.title{
+  font-size:18px;
+  font-weight:bold;
+  margin-bottom:10px;
+}
+.locked{display:none}
+input,select,button{
+  width:100%;
+  padding:14px;
+  margin-top:10px;
+  border-radius:8px;
+  font-size:16px;
+}
+input,select{border:1px solid #ccc}
+button{
+  border:0;
+  background:#222;
+  color:white;
+  font-weight:bold;
+}
+button:disabled{opacity:.45}
+.status{
+  padding:12px;
+  margin-top:10px;
+  border-radius:8px;
+  background:#eee;
+}
+.success{background:#d9f7df}
+.error{background:#ffdede}
+video{
+  width:100%;
+  margin-top:10px;
+  border-radius:10px;
+  background:#111;
+}
+canvas{display:none}
+#cameraArea{display:none}
+#photoPreview{
+  width:100%;
+  display:none;
+  margin-top:10px;
+  border-radius:10px;
+}
+</style>
+</head>
+
+<body>
+
+<div class="box">
+
+<h2>Employee Attendance</h2>
+
+<div class="step">
+  <div class="title">STEP 1 — Employee Verification</div>
+
+  <input id="employeeId"
+         placeholder="Employee ID"
+         autocomplete="off">
+
+  <button id="verifyButton" onclick="verifyEmployee()">
+    CHECK EMPLOYEE
+  </button>
+
+  <div id="employeeInfo"></div>
+</div>
+
+
+<div id="step2" class="step locked">
+  <div class="title">STEP 2 — Live Camera Selfie</div>
+
+  <button id="startCameraButton" onclick="startCamera()">
+    📷 OPEN LIVE CAMERA
+  </button>
+
+  <div id="cameraArea">
+    <video id="video" autoplay playsinline></video>
+
+    <button onclick="captureSelfie()">
+      CAPTURE SELFIE
+    </button>
+  </div>
+
+  <canvas id="canvas"></canvas>
+
+  <img id="photoPreview">
+
+  <button id="retakeButton"
+          onclick="retakeSelfie()"
+          style="display:none">
+    RETAKE SELFIE
+  </button>
+
+  <div id="selfieStatus" class="status">
+    Selfie pending.
+  </div>
+</div>
+
+
+<div id="step3" class="step locked">
+  <div class="title">STEP 3 — Location Verification</div>
+
+  <button id="locationButton"
+          onclick="checkLocation()"
+          disabled>
+    CHECK LOCATION
+  </button>
+
+  <div id="locationInfo"></div>
+</div>
+
+
+<div id="step4" class="step locked">
+  <div class="title">STEP 4 — Mark Attendance</div>
+
+  <select id="attendanceType">
+    <option value="IN">IN</option>
+    <option value="OUT">OUT</option>
+  </select>
+
+  <button id="markButton"
+          onclick="markAttendance()"
+          disabled>
+    MARK ATTENDANCE
+  </button>
+</div>
+
+
+<div id="status" class="status">
+  First Employee ID verify karo.
+</div>
+
+</div>
+
+
+<script>
+const API_URL =
+"https://script.google.com/macros/s/AKfycbwzPsfIo7CnYcacfiHZIyU5xxOQRsxPtrfSH9mtXjaeLNfB05rMgNvW6D2JbLDrFB-sUA/exec";
+
+
+let currentEmployee = null;
+let deviceToken = getDeviceToken();
+
+let currentLatitude = null;
+let currentLongitude = null;
+let currentAccuracy = null;
+let locationChecked = false;
+let selfieBase64 = null;
+let cameraStream = null;
+
+
+/* =========================
+   DEVICE TOKEN
+========================= */
+
+function getDeviceToken(){
+  let token = localStorage.getItem("new_attendance_device_token");
+
+  if(!token){
+    token = "DEV_" + crypto.randomUUID();
+    localStorage.setItem("new_attendance_device_token",token);
+  }
+
+  return token;
+}
+
+
+/* =========================
+   API REQUEST
+========================= */
+
+async function api(action,data={}){
+  const response = await fetch(API_URL,{
+    method:"POST",
+    headers:{
+      "Content-Type":"text/plain;charset=utf-8"
+    },
+    body:JSON.stringify({
+      action:action,
+      ...data
+    })
+  });
+
+  const result = await response.json();
+
+  if(!result.success){
+    throw new Error(result.error || "API error");
+  }
+
+  return result.result;
+}
+
+
+/* =========================
+   STATUS
+========================= */
+
+function showStatus(message,type=""){
+  const el=document.getElementById("status");
+  el.textContent=message;
+  el.className="status "+type;
+}
+
+
+/* =========================
+   EMPLOYEE VERIFY
+========================= */
+
+async function verifyEmployee(){
+
+  const id=document
+    .getElementById("employeeId")
+    .value
+    .trim()
+    .toUpperCase();
+
+  if(!id){
+    showStatus("Employee ID enter karo.","error");
+    return;
+  }
+
+  const button=document.getElementById("verifyButton");
+  button.disabled=true;
+
+  showStatus("Employee verify ho raha hai...");
+
+  try{
+    const emp=await api("getEmployee",{
+      employeeId:id
+    });
+
+    if(!emp){
+      throw new Error("Employee ID not found.");
+    }
+
+    currentEmployee=emp;
+
+    document.getElementById("employeeInfo").className="status success";
+    document.getElementById("employeeInfo").innerHTML=
+      "<b>✓ Employee Verified</b><br>"+
+      "ID: "+escapeHtml(emp.id)+"<br>"+
+      "Name: "+escapeHtml(emp.name);
+
+    document.getElementById("step2")
+      .classList.remove("locked");
+
+    showStatus("Employee verified. Live camera open karo.","success");
+
+  }catch(error){
+    currentEmployee=null;
+    hideAllSteps();
+    showStatus(error.message,"error");
+  }
+
+  button.disabled=false;
+}
+
+
+/* =========================
+   LIVE CAMERA
+========================= */
+
+async function startCamera(){
+
+  if(!currentEmployee){
+    showStatus("Pehle employee verify karo.","error");
+    return;
+  }
+
+  try{
+    cameraStream=await navigator.mediaDevices.getUserMedia({
+      video:{
+        facingMode:"user",
+        width:{ideal:720},
+        height:{ideal:720}
+      },
+      audio:false
+    });
+
+    document.getElementById("video").srcObject=cameraStream;
+    document.getElementById("cameraArea").style.display="block";
+    document.getElementById("startCameraButton").style.display="none";
+
+    showStatus("Camera open hai. Selfie capture karo.","success");
+
+  }catch(error){
+    showStatus(
+      "Camera permission nahi mili: "+error.message,
+      "error"
+    );
+  }
+}
+
+
+/* =========================
+   CAPTURE SELFIE
+========================= */
+
+function captureSelfie(){
+
+  const video=document.getElementById("video");
+  const canvas=document.getElementById("canvas");
+
+  if(!video.videoWidth){
+    showStatus("Camera ready nahi hai.","error");
+    return;
+  }
+
+  canvas.width=video.videoWidth;
+  canvas.height=video.videoHeight;
+
+  const ctx=canvas.getContext("2d");
+
+  ctx.drawImage(
+    video,
+    0,
+    0,
+    canvas.width,
+    canvas.height
+  );
+
+  const dataUrl=canvas.toDataURL("image/jpeg",0.70);
+
+  selfieBase64=dataUrl.split(",")[1];
+
+  document.getElementById("photoPreview").src=dataUrl;
+  document.getElementById("photoPreview").style.display="block";
+
+  document.getElementById("cameraArea").style.display="none";
+  document.getElementById("retakeButton").style.display="block";
+
+  stopCamera();
+
+  document.getElementById("selfieStatus").className="status success";
+  document.getElementById("selfieStatus").textContent=
+    "✓ Live selfie captured successfully.";
+
+  document.getElementById("step3").classList.remove("locked");
+  document.getElementById("locationButton").disabled=false;
+
+  showStatus("Selfie complete. Ab location check karo.","success");
+}
+
+
+/* =========================
+   STOP CAMERA
+========================= */
+
+function stopCamera(){
+
+  if(cameraStream){
+    cameraStream.getTracks().forEach(track=>track.stop());
+    cameraStream=null;
+  }
+}
+
+
+/* =========================
+   RETAKE
+========================= */
+
+function retakeSelfie(){
+
+  selfieBase64=null;
+
+  document.getElementById("photoPreview").style.display="none";
+  document.getElementById("retakeButton").style.display="none";
+  document.getElementById("startCameraButton").style.display="block";
+
+  document.getElementById("selfieStatus").className="status";
+  document.getElementById("selfieStatus").textContent="Selfie pending.";
+
+  resetLocation();
+
+  showStatus("Dobara live camera open karo.");
+}
+
+
+/* =========================
+   LOCATION
+========================= */
+
+function checkLocation(){
+
+  if(!selfieBase64){
+    showStatus("Pehle selfie capture karo.","error");
+    return;
+  }
+
+  const button=document.getElementById("locationButton");
+  button.disabled=true;
+
+  document.getElementById("locationInfo").innerHTML=
+    "<div class='status'>Fresh GPS location mil rahi hai...</div>";
+
+  showStatus("Location verify ho rahi hai...");
+
+  navigator.geolocation.getCurrentPosition(
+
+    async function(position){
+
+      const latitude=position.coords.latitude;
+      const longitude=position.coords.longitude;
+      const accuracy=position.coords.accuracy;
+
+      try{
+        const result=await api("verifyLocation",{
+          latitude:latitude,
+          longitude:longitude,
+          accuracy:accuracy
+        });
+
+        currentLatitude=result.latitude;
+        currentLongitude=result.longitude;
+        currentAccuracy=result.accuracy;
+
+        if(result.allowed){
+
+          locationChecked=true;
+
+          document.getElementById("locationInfo").innerHTML=
+            "<div class='status success'>"+
+            "<b>✓ Location Verified</b><br>"+
+            "Distance: "+result.distance+" meters<br>"+
+            "GPS Accuracy: "+result.accuracy+" meters<br>"+
+            "Allowed Radius: "+result.radius+" meters"+
+            "</div>";
+
+          document.getElementById("step4").classList.remove("locked");
+          document.getElementById("markButton").disabled=false;
+
+          showStatus("Location verified. Attendance mark karo.","success");
+
+        }else{
+
+          locationChecked=false;
+
+          document.getElementById("step4").classList.add("locked");
+          document.getElementById("markButton").disabled=true;
+
+          document.getElementById("locationInfo").innerHTML=
+            "<div class='status error'>"+
+            "<b>✗ Location Not Verified</b><br>"+
+            "Distance: "+(result.distance ?? "Unavailable")+" meters<br>"+
+            "GPS Accuracy: "+result.accuracy+" meters<br>"+
+            "Allowed Radius: "+result.radius+" meters"+
+            "</div>";
+
+          showStatus("Location verify nahi hui.","error");
+          button.disabled=false;
+        }
+
+      }catch(error){
+        button.disabled=false;
+        showStatus(error.message,"error");
+      }
+    },
+
+    function(error){
+      button.disabled=false;
+      showStatus("GPS error: "+error.message,"error");
+    },
+
+    {
+      enableHighAccuracy:true,
+      maximumAge:0,
+      timeout:60000
+    }
+  );
+}
+
+
+/* =========================
+   MARK ATTENDANCE
+========================= */
+
+async function markAttendance(){
+
+  if(!currentEmployee || !selfieBase64 || !locationChecked){
+    showStatus("Employee, selfie aur location verify karo.","error");
+    return;
+  }
+
+  const button=document.getElementById("markButton");
+  button.disabled=true;
+
+  showStatus("Attendance save ho rahi hai...");
+
+  try{
+
+    const result=await api("saveAttendance",{
+      payload:{
+        employeeId:currentEmployee.id,
+        type:document.getElementById("attendanceType").value,
+        deviceToken:deviceToken,
+        latitude:currentLatitude,
+        longitude:currentLongitude,
+        accuracy:currentAccuracy,
+        selfie:selfieBase64
+      }
+    });
+
+    showStatus(result.message,"success");
+
+    resetAll();
+
+  }catch(error){
+    button.disabled=false;
+    showStatus(error.message,"error");
+  }
+}
+
+
+/* =========================
+   RESET
+========================= */
+
+function resetLocation(){
+
+  locationChecked=false;
+  currentLatitude=null;
+  currentLongitude=null;
+  currentAccuracy=null;
+
+  document.getElementById("step3").classList.add("locked");
+  document.getElementById("step4").classList.add("locked");
+
+  document.getElementById("locationButton").disabled=true;
+  document.getElementById("markButton").disabled=true;
+  document.getElementById("locationInfo").innerHTML="";
+}
+
+
+function resetAll(){
+
+  stopCamera();
+
+  currentEmployee=null;
+  selfieBase64=null;
+
+  document.getElementById("employeeId").value="";
+  document.getElementById("employeeInfo").innerHTML="";
+
+  document.getElementById("step2").classList.add("locked");
+
+  document.getElementById("photoPreview").style.display="none";
+  document.getElementById("retakeButton").style.display="none";
+  document.getElementById("startCameraButton").style.display="block";
+
+  resetLocation();
+
+  document.getElementById("selfieStatus").className="status";
+  document.getElementById("selfieStatus").textContent="Selfie pending.";
+
+  document.getElementById("verifyButton").disabled=false;
+
+  showStatus("Attendance complete. Next employee ID enter karo.","success");
+}
+
+
+function hideAllSteps(){
+  stopCamera();
+  currentEmployee=null;
+  selfieBase64=null;
+
+  document.getElementById("step2").classList.add("locked");
+  resetLocation();
+}
+
+
+function escapeHtml(text){
+  return String(text||"")
+    .replace(/&/g,"&amp;")
+    .replace(/</g,"&lt;")
+    .replace(/>/g,"&gt;")
+    .replace(/"/g,"&quot;")
+    .replace(/'/g,"&#039;");
+}
+</script>
+
+</body>
+</html>
